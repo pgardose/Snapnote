@@ -91,18 +91,27 @@ class _EntryEditorScreenState extends State<EntryEditorScreen> {
     final content = _contentController.text.trim();
     if (content.isEmpty) return;
 
-    if (_isEditing) {
-      await _repo.update(
-        widget.existingEntry!,
-        newContent: content,
-        newSourceImagePath: _sourceImagePath,
-      );
-    } else {
-      await _repo.create(
-        subjectId: widget.subjectId,
-        content: content,
-        sourceImagePath: _sourceImagePath,
-      );
+    try {
+      if (_isEditing) {
+        await _repo.update(
+          widget.existingEntry!,
+          newContent: content,
+          newSourceImagePath: _sourceImagePath,
+        );
+      } else {
+        await _repo.create(
+          subjectId: widget.subjectId,
+          content: content,
+          sourceImagePath: _sourceImagePath,
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't save entry — try again")),
+        );
+      }
+      return; // stay on the screen so nothing gets lost
     }
 
     if (mounted) Navigator.pop(context);
