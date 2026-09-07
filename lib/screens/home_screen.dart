@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 
-import '../data/subject_repository.dart';
+import '../data/database_helper.dart';
+import '../data/entry_repository.dart';
 import '../models/subject.dart';
-import '../widgets/subject_tile.dart';
 import 'subject_detail_screen.dart';
 
-/// Placeholder-but-functional home screen: lists all Subjects and supports
-/// create / rename / delete. Tapping a subject opens its entries.
+/// Home screen: lists all Subjects, with entry counts, create/delete, and
+/// navigation into each Subject's entries.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -14,47 +14,113 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+/// A Subject paired with how many Entries it has, for display purposes.
+class _SubjectWithCount {
+  const _SubjectWithCount(this.subject, this.entryCount);
+  final Subject subject;
+  final int entryCount;
+}
+
 class _HomeScreenState extends State<HomeScreen> {
-  final _repo = SubjectRepository();
-  late Future<List<Subject>> _subjectsFuture;
+  final _db = DatabaseHelper.instance;
+  final _entryRepo = EntryRepository();
+
+  late Future<List<_SubjectWithCount>> _subjectsFuture;
 
   @override
   void initState() {
     super.initState();
-    _refresh();
+    _subjectsFuture = _loadSubjects();
   }
 
   void _refresh() {
     setState(() {
-      _subjectsFuture = _repo.getAll();
+      _subjectsFuture = _loadSubjects();
     });
+  }
+
+  Future<List<_SubjectWithCount>> _loadSubjects() async {
+    final subjects = await _db.getAllSubjects();
+
+    // Entry counts aren't stored on Subject, so derive them by asking the
+    // entry repository per subject. Fine at this scale (local, small lists);
+    // if this ever needs to handle hundreds of subjects, add a single
+    // GROUP BY query to DatabaseHelper instead.
+    final withCounts = await Future.wait(subjects.map((subject) async {
+      final entries = await _entryRepo.getForSubject(subject.id!);
+      return _SubjectWithCount(subject, entries.length);
+    }));
+
+    return withCounts;
   }
 
   Future<void> _createSubject() async {
     final name = await _promptForName(context, title: 'New Subject');
-    if (name == null || name.trim().isEmpty) return;
-    await _repo.create(name.trim());
+    final trimmed = name?.trim();
+    if (trimmed == null || trimmed.isEmpty) return;
+
+    await _db.createSubject(Subject(name: trimmed, createdAt: DateTime.now()));
     _refresh();
   }
 
-  Future<void> _renameSubject(Subject subject) async {
-    final name = await _promptForName(
-      context,
-      title: 'Rename Subject',
-      initialValue: subject.name,
+  Future<String?> _promptForName(
+    BuildContext context, {
+    required String title,
+  }) {
+    final controller = TextEditingController();
+    String? errorText;
+
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(title),
+              content: TextField(
+                controller: controller,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Subject name',
+                  errorText: errorText,
+                ),
+                onChanged: (_) {
+                  if (errorText != null) {
+                    setDialogState(() => errorText = null);
+                  }
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    if (controller.text.trim().isEmpty) {
+                      setDialogState(() => errorText = 'Name can\'t be empty');
+                      return;
+                    }
+                    Navigator.pop(context, controller.text.trim());
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
-    if (name == null || name.trim().isEmpty) return;
-    await _repo.rename(subject, name.trim());
-    _refresh();
   }
 
-  Future<void> _deleteSubject(Subject subject) async {
+  Future<bool> _confirmDelete(Subject subject) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete subject?'),
         content: Text(
-          'This deletes "${subject.name}" and all of its entries. This cannot be undone.',
+          'This deletes "${subject.name}" and all of its entries '
+          '(cascade delete). This cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -68,75 +134,71 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-    if (confirmed == true && subject.id != null) {
-      await _repo.delete(subject.id!);
-      _refresh();
-    }
+    return confirmed ?? false;
   }
 
-  Future<String?> _promptForName(
-    BuildContext context, {
-    required String title,
-    String initialValue = '',
-  }) {
-    final controller = TextEditingController(text: initialValue);
-    return showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Subject name'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Save'),
-          ),
-        ],
+  Future<void> _deleteSubject(Subject subject) async {
+    await _db.deleteSubject(subject.id!);
+    _refresh();
+  }
+
+  void _openSubject(Subject subject) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SubjectDetailScreen(subjectId: subject.id!),
       ),
-    );
+    ).then((_) => _refresh());
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Subjects')),
-      body: FutureBuilder<List<Subject>>(
+      appBar: AppBar(title: const Text('SnapNote')),
+      body: FutureBuilder<List<_SubjectWithCount>>(
         future: _subjectsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          final subjects = snapshot.data ?? [];
-          if (subjects.isEmpty) {
+
+          final items = snapshot.data ?? const [];
+          if (items.isEmpty) {
             return const Center(
-              child: Text('No subjects yet. Tap + to add one.'),
+              child: Text('No subjects yet — tap + to add one'),
             );
           }
+
           return ListView.separated(
-            itemCount: subjects.length,
+            itemCount: items.length,
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (context, index) {
-              final subject = subjects[index];
-              return SubjectTile(
-                subject: subject,
-                onTap: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => SubjectDetailScreen(subject: subject),
-                    ),
-                  );
-                  _refresh();
-                },
-                onEdit: () => _renameSubject(subject),
-                onDelete: () => _deleteSubject(subject),
+              final item = items[index];
+              final subject = item.subject;
+
+              return Dismissible(
+                key: ValueKey(subject.id),
+                direction: DismissDirection.endToStart,
+                background: Container(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: const Icon(Icons.delete_outline),
+                ),
+                confirmDismiss: (_) => _confirmDelete(subject),
+                onDismissed: (_) => _deleteSubject(subject),
+                child: ListTile(
+                  leading: const Icon(Icons.folder_outlined),
+                  title: Text(subject.name),
+                  subtitle: Text(
+                    '${item.entryCount} ${item.entryCount == 1 ? 'entry' : 'entries'}',
+                  ),
+                  onTap: () => _openSubject(subject),
+                  onLongPress: () async {
+                    final confirmed = await _confirmDelete(subject);
+                    if (confirmed) await _deleteSubject(subject);
+                  },
+                ),
               );
             },
           );
@@ -144,6 +206,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _createSubject,
+        tooltip: 'New Subject',
         child: const Icon(Icons.add),
       ),
     );

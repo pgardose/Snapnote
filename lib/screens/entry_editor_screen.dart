@@ -16,10 +16,15 @@ class EntryEditorScreen extends StatefulWidget {
     super.key,
     required this.subjectId,
     this.existingEntry,
+    this.initialImagePath,
   });
 
   final int subjectId;
   final Entry? existingEntry;
+
+  /// Path to a photo already captured/picked elsewhere (e.g. CaptureScreen)
+  /// that should be transcribed as soon as this screen opens.
+  final String? initialImagePath;
 
   @override
   State<EntryEditorScreen> createState() => _EntryEditorScreenState();
@@ -44,6 +49,14 @@ class _EntryEditorScreenState extends State<EntryEditorScreen> {
     _contentController =
         TextEditingController(text: widget.existingEntry?.content ?? '');
     _sourceImagePath = widget.existingEntry?.sourceImagePath;
+
+    final initialPath = widget.initialImagePath;
+    if (initialPath != null) {
+      // Fire and forget: transcribeFile manages its own loading/error state.
+      // Safe to call from initState since setState only runs after the
+      // async gap, once the widget is mounted.
+      _transcribeFile(File(initialPath));
+    }
   }
 
   @override
@@ -53,16 +66,17 @@ class _EntryEditorScreenState extends State<EntryEditorScreen> {
   }
 
   Future<void> _transcribeFrom(Future<File?> Function() pick) async {
+    final file = await pick();
+    if (file == null) return; // user cancelled the picker
+    await _transcribeFile(file);
+  }
+
+  Future<void> _transcribeFile(File file) async {
     setState(() {
       _error = null;
       _isTranscribing = true;
     });
     try {
-      final file = await pick();
-      if (file == null) {
-        setState(() => _isTranscribing = false);
-        return;
-      }
       final text = await _transcriptionService.transcribeImage(file);
       setState(() {
         _sourceImagePath = file.path;
@@ -77,7 +91,7 @@ class _EntryEditorScreenState extends State<EntryEditorScreen> {
     } catch (e) {
       setState(() => _error = 'Something went wrong: $e');
     } finally {
-      setState(() => _isTranscribing = false);
+      if (mounted) setState(() => _isTranscribing = false);
     }
   }
 
@@ -114,7 +128,8 @@ class _EntryEditorScreenState extends State<EntryEditorScreen> {
         title: Text(_isEditing ? 'Edit Entry' : 'New Entry'),
         actions: [
           IconButton(
-            icon: Icon(_showPreview ? Icons.edit_outlined : Icons.visibility_outlined),
+            icon: Icon(
+                _showPreview ? Icons.edit_outlined : Icons.visibility_outlined),
             tooltip: _showPreview ? 'Edit' : 'Preview',
             onPressed: () => setState(() => _showPreview = !_showPreview),
           ),
