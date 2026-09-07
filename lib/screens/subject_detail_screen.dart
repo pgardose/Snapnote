@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../data/database_helper.dart';
 import '../data/entry_repository.dart';
 import '../models/entry.dart';
 import '../models/subject.dart';
@@ -8,28 +9,36 @@ import 'entry_editor_screen.dart';
 
 /// Lists Entries within a single Subject. Supports create (typed or via
 /// photo transcription), edit, and delete.
+///
+/// Takes only [subjectId] (not a Subject object) so callers don't need to
+/// hold a possibly-stale Subject around — this screen loads the current
+/// name itself, which also means a rename elsewhere is picked up correctly.
 class SubjectDetailScreen extends StatefulWidget {
-  const SubjectDetailScreen({super.key, required this.subject});
+  const SubjectDetailScreen({super.key, required this.subjectId});
 
-  final Subject subject;
+  final int subjectId;
 
   @override
   State<SubjectDetailScreen> createState() => _SubjectDetailScreenState();
 }
 
 class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
+  final _db = DatabaseHelper.instance;
   final _repo = EntryRepository();
+
+  late Future<Subject?> _subjectFuture;
   late Future<List<Entry>> _entriesFuture;
 
   @override
   void initState() {
     super.initState();
+    _subjectFuture = _db.getSubject(widget.subjectId);
     _refresh();
   }
 
   void _refresh() {
     setState(() {
-      _entriesFuture = _repo.getForSubject(widget.subject.id!);
+      _entriesFuture = _repo.getForSubject(widget.subjectId);
     });
   }
 
@@ -38,7 +47,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => EntryEditorScreen(
-          subjectId: widget.subject.id!,
+          subjectId: widget.subjectId,
           existingEntry: entry,
         ),
       ),
@@ -73,7 +82,14 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.subject.name)),
+      appBar: AppBar(
+        title: FutureBuilder<Subject?>(
+          future: _subjectFuture,
+          builder: (context, snapshot) {
+            return Text(snapshot.data?.name ?? '');
+          },
+        ),
+      ),
       body: FutureBuilder<List<Entry>>(
         future: _entriesFuture,
         builder: (context, snapshot) {
@@ -118,6 +134,8 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
 
   String _preview(String content) {
     const maxLen = 140;
-    return content.length > maxLen ? '${content.substring(0, maxLen)}…' : content;
+    return content.length > maxLen
+        ? '${content.substring(0, maxLen)}…'
+        : content;
   }
 }
