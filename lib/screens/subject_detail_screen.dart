@@ -5,6 +5,7 @@ import '../data/entry_repository.dart';
 import '../models/entry.dart';
 import '../models/subject.dart';
 import '../widgets/latex_content_view.dart';
+import 'capture_screen.dart';
 import 'entry_editor_screen.dart';
 
 /// Lists Entries within a single Subject. Supports create (typed or via
@@ -55,6 +56,19 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
     _refresh();
   }
 
+  Future<void> _openCapture() async {
+    // CaptureScreen pushReplacement's into EntryEditorScreen once the user
+    // confirms a photo, so awaiting this single push covers both legs of
+    // the capture -> transcribe -> edit flow.
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CaptureScreen(subjectId: widget.subjectId),
+      ),
+    );
+    _refresh();
+  }
+
   Future<void> _deleteEntry(Entry entry) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -74,9 +88,20 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
       ),
     );
     if (confirmed == true && entry.id != null) {
-      await _repo.delete(entry.id!);
-      _refresh();
+      try {
+        await _repo.delete(entry.id!);
+        _refresh();
+      } catch (_) {
+        _showError("Couldn't delete entry — try again");
+      }
     }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -113,7 +138,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                   title: LatexContentView(
                     content: _preview(entry.content),
                   ),
-                  subtitle: Text('Updated ${entry.updatedAt}'),
+                  subtitle: Text('Updated ${_formatDateTime(entry.updatedAt)}'),
                   onTap: () => _openEditor(entry: entry),
                   trailing: IconButton(
                     icon: const Icon(Icons.delete_outline),
@@ -126,7 +151,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _openEditor(),
+        onPressed: _openCapture,
         child: const Icon(Icons.add),
       ),
     );
@@ -137,5 +162,29 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
     return content.length > maxLen
         ? '${content.substring(0, maxLen)}…'
         : content;
+  }
+
+  /// Formats e.g. "2026-09-06 14:32:07.891023" as "Sep 6, 2026, 2:32 PM"
+  /// without pulling in the intl package for one string.
+  String _formatDateTime(DateTime dt) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final hour24 = dt.hour;
+    final hour12 = hour24 % 12 == 0 ? 12 : hour24 % 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final period = hour24 < 12 ? 'AM' : 'PM';
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}, $hour12:$minute $period';
   }
 }

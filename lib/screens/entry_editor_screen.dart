@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../data/entry_repository.dart';
 import '../models/entry.dart';
 import '../services/gemini_transcription_service.dart';
-import '../services/image_storage_service.dart';
 import '../widgets/latex_content_view.dart';
 
 /// Create a new [Entry] or edit an existing one. Content can be typed
@@ -32,7 +31,6 @@ class EntryEditorScreen extends StatefulWidget {
 
 class _EntryEditorScreenState extends State<EntryEditorScreen> {
   final _repo = EntryRepository();
-  final _imageService = ImageStorageService();
   final _transcriptionService = GeminiTranscriptionService();
 
   late final TextEditingController _contentController;
@@ -65,12 +63,6 @@ class _EntryEditorScreenState extends State<EntryEditorScreen> {
     super.dispose();
   }
 
-  Future<void> _transcribeFrom(Future<File?> Function() pick) async {
-    final file = await pick();
-    if (file == null) return; // user cancelled the picker
-    await _transcribeFile(file);
-  }
-
   Future<void> _transcribeFile(File file) async {
     setState(() {
       _error = null;
@@ -100,16 +92,11 @@ class _EntryEditorScreenState extends State<EntryEditorScreen> {
     if (content.isEmpty) return;
 
     if (_isEditing) {
-      await _repo.update(widget.existingEntry!, newContent: content);
-      // Keep source image in sync if a new photo was transcribed in.
-      if (_sourceImagePath != widget.existingEntry!.sourceImagePath) {
-        // Minimal path: re-create via update through the entry object.
-        final updated = widget.existingEntry!.copyWith(
-          content: content,
-          sourceImagePath: _sourceImagePath,
-        );
-        await _repo.update(updated, newContent: content);
-      }
+      await _repo.update(
+        widget.existingEntry!,
+        newContent: content,
+        newSourceImagePath: _sourceImagePath,
+      );
     } else {
       await _repo.create(
         subjectId: widget.subjectId,
@@ -150,28 +137,6 @@ class _EntryEditorScreenState extends State<EntryEditorScreen> {
               padding: const EdgeInsets.all(12),
               child: Text(_error!),
             ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Wrap(
-              spacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _isTranscribing
-                      ? null
-                      : () => _transcribeFrom(_imageService.pickFromCamera),
-                  icon: const Icon(Icons.camera_alt_outlined),
-                  label: const Text('Camera'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _isTranscribing
-                      ? null
-                      : () => _transcribeFrom(_imageService.pickFromGallery),
-                  icon: const Icon(Icons.photo_library_outlined),
-                  label: const Text('Gallery'),
-                ),
-              ],
-            ),
-          ),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),

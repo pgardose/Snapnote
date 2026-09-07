@@ -22,15 +22,44 @@ class LatexContentView extends StatelessWidget {
     final baseStyle = style ?? DefaultTextStyle.of(context).style;
     final segments = _parseSegments(content);
 
-    return Wrap(
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        for (final segment in segments) _buildSegment(segment, baseStyle),
-      ],
+    // Block math can't live inside the Wrap below: Wrap hands its children
+    // unbounded constraints along the main axis, and a SizedBox(width:
+    // infinity) — or anything else that asks to fill available width —
+    // throws under that combination. So instead we walk the segments and
+    // build a Column: consecutive text/inline-math segments are batched
+    // into one Wrap each (which *is* safe, since none of those children
+    // demand infinite width), and every block-math segment flushes the
+    // current run and becomes its own full-width Column child.
+    final children = <Widget>[];
+    final currentRun = <Widget>[];
+
+    void flushRun() {
+      if (currentRun.isEmpty) return;
+      children.add(Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: List.of(currentRun),
+      ));
+      currentRun.clear();
+    }
+
+    for (final segment in segments) {
+      if (segment.type == _SegmentType.blockMath) {
+        flushRun();
+        children.add(_buildBlockMath(segment, baseStyle));
+      } else {
+        currentRun.add(_buildInlineSegment(segment, baseStyle));
+      }
+    }
+    flushRun();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: children,
     );
   }
 
-  Widget _buildSegment(_ContentSegment segment, TextStyle baseStyle) {
+  Widget _buildInlineSegment(_ContentSegment segment, TextStyle baseStyle) {
     switch (segment.type) {
       case _SegmentType.text:
         return Text(segment.text, style: baseStyle);
@@ -47,21 +76,26 @@ class LatexContentView extends StatelessWidget {
           ),
         );
       case _SegmentType.blockMath:
-        return SizedBox(
-          width: double.infinity,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Math.tex(
-              segment.text,
-              textStyle: baseStyle,
-              onErrorFallback: (err) => Text(
-                '\$\$${segment.text}\$\$',
-                style: baseStyle.copyWith(color: Colors.red),
-              ),
-            ),
-          ),
-        );
+        // Never reached: build() intercepts blockMath before calling this.
+        throw StateError('blockMath must not reach _buildInlineSegment');
     }
+  }
+
+  Widget _buildBlockMath(_ContentSegment segment, TextStyle baseStyle) {
+    // A plain Column child, not wrapped in Wrap or SizedBox(width: infinity)
+    // — Column gives its children bounded/loose width constraints, so this
+    // is safe where the old single-Wrap layout wasn't.
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Math.tex(
+        segment.text,
+        textStyle: baseStyle,
+        onErrorFallback: (err) => Text(
+          '\$\$${segment.text}\$\$',
+          style: baseStyle.copyWith(color: Colors.red),
+        ),
+      ),
+    );
   }
 
   List<_ContentSegment> _parseSegments(String input) {
@@ -80,16 +114,19 @@ class LatexContentView extends StatelessWidget {
       final blockMatch = match.group(1);
       final inlineMatch = match.group(2);
       if (blockMatch != null) {
-        segments.add(_ContentSegment(_SegmentType.blockMath, blockMatch.trim()));
+        segments
+            .add(_ContentSegment(_SegmentType.blockMath, blockMatch.trim()));
       } else if (inlineMatch != null) {
-        segments.add(_ContentSegment(_SegmentType.inlineMath, inlineMatch.trim()));
+        segments
+            .add(_ContentSegment(_SegmentType.inlineMath, inlineMatch.trim()));
       }
 
       lastEnd = match.end;
     }
 
     if (lastEnd < input.length) {
-      segments.add(_ContentSegment(_SegmentType.text, input.substring(lastEnd)));
+      segments
+          .add(_ContentSegment(_SegmentType.text, input.substring(lastEnd)));
     }
 
     return segments;

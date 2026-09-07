@@ -37,7 +37,9 @@ Rules:
 
   GenerativeModel _buildModel() {
     final apiKey = dotenv.env['GEMINI_API_KEY'];
-    if (apiKey == null || apiKey.isEmpty || apiKey == 'your_gemini_api_key_here') {
+    if (apiKey == null ||
+        apiKey.isEmpty ||
+        apiKey == 'your_gemini_api_key_here') {
       throw TranscriptionException(
         'GEMINI_API_KEY is not set. Copy .env.example to .env and add your '
         'free-tier key from https://aistudio.google.com/app/apikey',
@@ -67,9 +69,31 @@ Rules:
       return text;
     } on TranscriptionException {
       rethrow;
+    } on GenerativeAIException catch (e) {
+      // The google_generative_ai package doesn't expose a structured HTTP
+      // status code on its exceptions (GenerativeAIException/ServerException
+      // only carry a `message` string), so detecting a 429/quota failure
+      // means pattern-matching on that message. Google's server errors
+      // typically surface the status code and/or "RESOURCE_EXHAUSTED" /
+      // "quota" in the text, so we check for those case-insensitively.
+      if (_isRateLimitError(e.message)) {
+        throw TranscriptionException(
+          "You've hit the free-tier rate limit — wait a moment and try again.",
+        );
+      }
+      throw TranscriptionException('Transcription failed: ${e.message}');
     } catch (e) {
       throw TranscriptionException('Transcription failed: $e');
     }
+  }
+
+  bool _isRateLimitError(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('429') ||
+        lower.contains('quota') ||
+        lower.contains('rate limit') ||
+        lower.contains('resource_exhausted') ||
+        lower.contains('resource exhausted');
   }
 
   String _guessMimeType(String path) {

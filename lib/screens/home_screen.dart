@@ -59,8 +59,20 @@ class _HomeScreenState extends State<HomeScreen> {
     final trimmed = name?.trim();
     if (trimmed == null || trimmed.isEmpty) return;
 
-    await _db.createSubject(Subject(name: trimmed, createdAt: DateTime.now()));
-    _refresh();
+    try {
+      await _db
+          .createSubject(Subject(name: trimmed, createdAt: DateTime.now()));
+      _refresh();
+    } catch (_) {
+      _showError("Couldn't save subject — try again");
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   Future<String?> _promptForName(
@@ -138,8 +150,17 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _deleteSubject(Subject subject) async {
-    await _db.deleteSubject(subject.id!);
-    _refresh();
+    try {
+      await _db.deleteSubject(subject.id!);
+    } catch (_) {
+      _showError("Couldn't delete subject — try again");
+    } finally {
+      // Refresh either way: on success this reflects the deletion; on
+      // failure it re-syncs the list with what's actually in the DB, which
+      // matters for the swipe-to-dismiss path since Dismissible has
+      // already removed the row from view by the time onDismissed fires.
+      _refresh();
+    }
   }
 
   void _openSubject(Subject subject) {
